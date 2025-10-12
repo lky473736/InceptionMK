@@ -1,29 +1,39 @@
-# train/byol.py
+# SSL/byol.py
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-import torchvision.transforms as transforms
 import argparse
 import copy
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from model import YourBackboneModel
+from model import InceptionMK
+
+def jitter(x, sigma=0.03):
+    return x + torch.randn_like(x) * sigma
+
+def scaling(x, sigma=0.1):
+    factor = torch.randn(x.size(0), 1, x.size(2)).to(x.device) * sigma + 1
+    return x * factor
+
+def augment(x):
+    x = jitter(x)
+    x = scaling(x)
+    return x
 
 class BYOLDataset(torch.utils.data.Dataset):
-    def __init__(self, base_dataset, transform):
+    def __init__(self, base_dataset):
         self.base_dataset = base_dataset
-        self.transform = transform
         
     def __len__(self):
         return len(self.base_dataset)
     
     def __getitem__(self, idx):
-        img, _ = self.base_dataset[idx]
-        img1 = self.transform(img)
-        img2 = self.transform(img)
-        return img1, img2
+        data, _ = self.base_dataset[idx]
+        data1 = augment(data.unsqueeze(0)).squeeze(0)
+        data2 = augment(data.unsqueeze(0)).squeeze(0)
+        return data1, data2
 
 def pretrain(backbone, train_loader, args):
     online_encoder = backbone
@@ -60,19 +70,18 @@ def pretrain(backbone, train_loader, args):
         predictor.train()
         total_loss = 0
         
-        for img1, img2 in train_loader:
-            img1, img2 = img1.to(args.device), img2.to(args.device)
-            
+        for data1, data2 in train_loader:
+            data1, data2 = data1.to(args.device), data2.to(args.device)
             optimizer.zero_grad()
             
-            online_y1 = projector(online_encoder(img1))
-            online_y2 = projector(online_encoder(img2))
+            online_y1 = projector(online_encoder.forward_features(data1))
+            online_y2 = projector(online_encoder.forward_features(data2))
             online_z1 = predictor(online_y1)
             online_z2 = predictor(online_y2)
             
             with torch.no_grad():
-                target_y1 = target_projector(target_encoder(img1))
-                target_y2 = target_projector(target_encoder(img2))
+                target_y1 = target_projector(target_encoder.forward_features(data1))
+                target_y2 = target_projector(target_encoder.forward_features(data2))
             
             loss1 = 2 - 2 * F.cosine_similarity(online_z1, target_y2.detach(), dim=-1).mean()
             loss2 = 2 - 2 * F.cosine_similarity(online_z2, target_y1.detach(), dim=-1).mean()
@@ -107,10 +116,10 @@ def downstream(backbone, train_loader, val_loader, args, num_classes):
         correct = 0
         total = 0
         
-        for images, labels in train_loader:
-            images, labels = images.to(args.device), labels.to(args.device)
+        for data, labels in train_loader:
+            data, labels = data.to(args.device), labels.to(args.device)
             with torch.no_grad():
-                features = backbone(images)
+                features = backbone.forward_features(data)
             optimizer.zero_grad()
             outputs = classifier(features)
             loss = criterion(outputs, labels)
@@ -137,10 +146,10 @@ def downstream(backbone, train_loader, val_loader, args, num_classes):
         correct = 0
         total = 0
         
-        for images, labels in train_loader:
-            images, labels = images.to(args.device), labels.to(args.device)
+        for data, labels in train_loader:
+            data, labels = data.to(args.device), labels.to(args.device)
             optimizer.zero_grad()
-            features = backbone(images)
+            features = backbone.forward_features(data)
             outputs = classifier(features)
             loss = criterion(outputs, labels)
             loss.backward()
@@ -160,9 +169,9 @@ def evaluate(backbone, classifier, val_loader, args):
     total = 0
     
     with torch.no_grad():
-        for images, labels in val_loader:
-            images, labels = images.to(args.device), labels.to(args.device)
-            features = backbone(images)
+        for data, labels in val_loader:
+            data, labels = data.to(args.device), labels.to(args.device)
+            features = backbone.forward_features(data)
             outputs = classifier(features)
             _, predicted = outputs.max(1)
             total += labels.size(0)
@@ -177,13 +186,14 @@ if __name__ == '__main__':
     parser.add_argument('--pretrain_lr', type=float, default=0.001)
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--weight_decay', type=float, default=1e-4)
-    parser.add_argument('--feature_dim', type=int, default=512)
+    parser.add_argument('--input_channels', type=int, default=9)
+    parser.add_argument('--feature_dim', type=int, default=128)
     parser.add_argument('--projection_dim', type=int, default=256)
     parser.add_argument('--ema_tau', type=float, default=0.996)
     parser.add_argument('--num_classes', type=int, default=10)
     parser.add_argument('--device', type=str, default='cuda')
     args = parser.parse_args()
     
-    backbone = YourBackboneModel().to(args.device)
+    backbone = InceptionMK(input_channels=args.input_channels, embedding_dim=args.feature_dim).to(args.device)
     pretrain(backbone, pretrain_loader, args)
     downstream(backbone, train_loader, val_loader, args, args.num_classes)
