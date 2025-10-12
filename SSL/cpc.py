@@ -1,37 +1,33 @@
-# train/cpc.py
+# SSL/cpc.py
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-import torchvision.transforms as transforms
 import argparse
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from model import YourBackboneModel
+from model import InceptionMK
 
 class CPCDataset(torch.utils.data.Dataset):
-    def __init__(self, base_dataset, patch_size=16):
+    def __init__(self, base_dataset, n_segments=8):
         self.base_dataset = base_dataset
-        self.patch_size = patch_size
+        self.n_segments = n_segments
         
     def __len__(self):
         return len(self.base_dataset)
     
     def __getitem__(self, idx):
-        img, _ = self.base_dataset[idx]
-        if not isinstance(img, torch.Tensor):
-            img = transforms.ToTensor()(img)
-        
-        c, h, w = img.shape
-        n_patches_h = h // self.patch_size
-        n_patches_w = w // self.patch_size
-        
-        patches = img.unfold(1, self.patch_size, self.patch_size).unfold(2, self.patch_size, self.patch_size)
-        patches = patches.contiguous().view(c, n_patches_h * n_patches_w, self.patch_size, self.patch_size)
-        patches = patches.permute(1, 0, 2, 3)
-        
-        return patches
+        data, _ = self.base_dataset[idx]
+        seq_len = data.shape[0]
+        segment_len = seq_len // self.n_segments
+        segments = []
+        for i in range(self.n_segments):
+            start = i * segment_len
+            end = start + segment_len
+            segments.append(data[start:end])
+        segments = torch.stack(segments)
+        return segments
 
 def pretrain(backbone, train_loader, args):
     context_network = nn.GRU(args.feature_dim, args.hidden_dim, batch_first=True).to(args.device)
@@ -48,15 +44,15 @@ def pretrain(backbone, train_loader, args):
         predictor.train()
         total_loss = 0
         
-        for patches in train_loader:
-            patches = patches.to(args.device)
-            batch_size, n_patches = patches.shape[:2]
+        for segments in train_loader:
+            segments = segments.to(args.device)
+            batch_size, n_segments = segments.shape[:2]
             
-            patches = patches.view(batch_size * n_patches, *patches.shape[2:])
-            z = backbone(patches)
-            z = z.view(batch_size, n_patches, -1)
+            segments = segments.view(batch_size * n_segments, *segments.shape[2:])
+            z = backbone.forward_features(segments)
+            z = z.view(batch_size, n_segments, -1)
             
-            context_steps = n_patches // 2
+            context_steps = n_segments // 2
             z_context = z[:, :context_steps, :]
             z_future = z[:, context_steps:, :]
             
@@ -64,23 +60,18 @@ def pretrain(backbone, train_loader, args):
             c_last = c[:, -1, :]
             
             optimizer.zero_grad()
-            
             pred = predictor(c_last)
             
             loss = 0
             for i in range(z_future.shape[1]):
                 z_target = z_future[:, i, :]
-                
                 similarity = F.cosine_similarity(pred.unsqueeze(1), z_target.unsqueeze(1), dim=-1)
-                
                 negative_samples = z_future[torch.randperm(batch_size)][:, i, :]
                 neg_similarity = F.cosine_similarity(pred.unsqueeze(1), negative_samples.unsqueeze(1), dim=-1)
-                
                 loss += -torch.log(torch.exp(similarity) / (torch.exp(similarity) + torch.exp(neg_similarity).sum())).mean()
             
             loss.backward()
             optimizer.step()
-            
             total_loss += loss.item()
         
         print(f'Pretrain Epoch {epoch+1}/{args.pretrain_epochs}: Loss: {total_loss/len(train_loader):.4f}')
@@ -101,10 +92,10 @@ def downstream(backbone, train_loader, val_loader, args, num_classes):
         correct = 0
         total = 0
         
-        for images, labels in train_loader:
-            images, labels = images.to(args.device), labels.to(args.device)
+        for data, labels in train_loader:
+            data, labels = data.to(args.device), labels.to(args.device)
             with torch.no_grad():
-                features = backbone(images)
+                features = backbone.forward_features(data)
             optimizer.zero_grad()
             outputs = classifier(features)
             loss = criterion(outputs, labels)
@@ -131,10 +122,10 @@ def downstream(backbone, train_loader, val_loader, args, num_classes):
         correct = 0
         total = 0
         
-        for images, labels in train_loader:
-            images, labels = images.to(args.device), labels.to(args.device)
+        for data, labels in train_loader:
+            data, labels = data.to(args.device), labels.to(args.device)
             optimizer.zero_grad()
-            features = backbone(images)
+            features = backbone.forward_features(data)
             outputs = classifier(features)
             loss = criterion(outputs, labels)
             loss.backward()
@@ -154,9 +145,9 @@ def evaluate(backbone, classifier, val_loader, args):
     total = 0
     
     with torch.no_grad():
-        for images, labels in val_loader:
-            images, labels = images.to(args.device), labels.to(args.device)
-            features = backbone(images)
+        for data, labels in val_loader:
+            data, labels = data.to(args.device), labels.to(args.device)
+            features = backbone.forward_features(data)
             outputs = classifier(features)
             _, predicted = outputs.max(1)
             total += labels.size(0)
@@ -171,13 +162,14 @@ if __name__ == '__main__':
     parser.add_argument('--pretrain_lr', type=float, default=0.001)
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--weight_decay', type=float, default=1e-4)
-    parser.add_argument('--feature_dim', type=int, default=512)
+    parser.add_argument('--input_channels', type=int, default=9)
+    parser.add_argument('--feature_dim', type=int, default=128)
     parser.add_argument('--hidden_dim', type=int, default=256)
-    parser.add_argument('--patch_size', type=int, default=16)
+    parser.add_argument('--n_segments', type=int, default=8)
     parser.add_argument('--num_classes', type=int, default=10)
     parser.add_argument('--device', type=str, default='cuda')
     args = parser.parse_args()
     
-    backbone = YourBackboneModel().to(args.device)
+    backbone = InceptionMK(input_channels=args.input_channels, embedding_dim=args.feature_dim).to(args.device)
     pretrain(backbone, pretrain_loader, args)
     downstream(backbone, train_loader, val_loader, args, args.num_classes)
