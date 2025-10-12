@@ -1,7 +1,7 @@
 # InceptionMK
 **(paper source) Geometric Self-Supervised Learning for HAR using Inception with Multi-Kernel Convolutions (https://github.com/lky473736/InceptionMK.git)**
 
-<p align="center"><img src='./vpipeline'></p>
+<p align="center"><img src='./vpipeline.png'></p>
 
 This repository implements the methodology proposed in the paper **Geometric Self-Supervised Learning for HAR using Inception with Multi-Kernel Convolutions**.
 
