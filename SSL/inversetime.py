@@ -1,38 +1,29 @@
-# train/inversetime.py
+# SSL/inversetime.py
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torchvision.transforms as transforms
 import argparse
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from model import YourBackboneModel
+from model import InceptionMK
 
 class InverseTimeDataset(torch.utils.data.Dataset):
-    def __init__(self, base_dataset, transform=None):
+    def __init__(self, base_dataset):
         self.base_dataset = base_dataset
-        self.transform = transform
         
     def __len__(self):
         return len(self.base_dataset)
     
     def __getitem__(self, idx):
-        img, _ = self.base_dataset[idx]
-        
+        data, _ = self.base_dataset[idx]
         is_flipped = torch.randint(0, 2, (1,)).item()
-        
         if is_flipped:
-            img = transforms.functional.hflip(img)
-        
-        if self.transform:
-            img = self.transform(img)
-        
-        return img, is_flipped
+            data = torch.flip(data, [0])
+        return data, is_flipped
 
 def pretrain(backbone, train_loader, args):
     classifier = nn.Linear(args.feature_dim, 2).to(args.device)
-    
     optimizer = optim.Adam(list(backbone.parameters()) + list(classifier.parameters()), 
                           lr=args.pretrain_lr, weight_decay=args.weight_decay)
     criterion = nn.CrossEntropyLoss()
@@ -44,11 +35,10 @@ def pretrain(backbone, train_loader, args):
         correct = 0
         total = 0
         
-        for images, labels in train_loader:
-            images, labels = images.to(args.device), labels.to(args.device)
-            
+        for data, labels in train_loader:
+            data, labels = data.to(args.device), labels.to(args.device)
             optimizer.zero_grad()
-            features = backbone(images)
+            features = backbone.forward_features(data)
             outputs = classifier(features)
             loss = criterion(outputs, labels)
             loss.backward()
@@ -78,10 +68,10 @@ def downstream(backbone, train_loader, val_loader, args, num_classes):
         correct = 0
         total = 0
         
-        for images, labels in train_loader:
-            images, labels = images.to(args.device), labels.to(args.device)
+        for data, labels in train_loader:
+            data, labels = data.to(args.device), labels.to(args.device)
             with torch.no_grad():
-                features = backbone(images)
+                features = backbone.forward_features(data)
             optimizer.zero_grad()
             outputs = classifier(features)
             loss = criterion(outputs, labels)
@@ -108,10 +98,10 @@ def downstream(backbone, train_loader, val_loader, args, num_classes):
         correct = 0
         total = 0
         
-        for images, labels in train_loader:
-            images, labels = images.to(args.device), labels.to(args.device)
+        for data, labels in train_loader:
+            data, labels = data.to(args.device), labels.to(args.device)
             optimizer.zero_grad()
-            features = backbone(images)
+            features = backbone.forward_features(data)
             outputs = classifier(features)
             loss = criterion(outputs, labels)
             loss.backward()
@@ -131,9 +121,9 @@ def evaluate(backbone, classifier, val_loader, args):
     total = 0
     
     with torch.no_grad():
-        for images, labels in val_loader:
-            images, labels = images.to(args.device), labels.to(args.device)
-            features = backbone(images)
+        for data, labels in val_loader:
+            data, labels = data.to(args.device), labels.to(args.device)
+            features = backbone.forward_features(data)
             outputs = classifier(features)
             _, predicted = outputs.max(1)
             total += labels.size(0)
@@ -148,11 +138,12 @@ if __name__ == '__main__':
     parser.add_argument('--pretrain_lr', type=float, default=0.001)
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--weight_decay', type=float, default=1e-4)
-    parser.add_argument('--feature_dim', type=int, default=512)
+    parser.add_argument('--input_channels', type=int, default=9)
+    parser.add_argument('--feature_dim', type=int, default=128)
     parser.add_argument('--num_classes', type=int, default=10)
     parser.add_argument('--device', type=str, default='cuda')
     args = parser.parse_args()
     
-    backbone = YourBackboneModel().to(args.device)
+    backbone = InceptionMK(input_channels=args.input_channels, embedding_dim=args.feature_dim).to(args.device)
     pretrain(backbone, pretrain_loader, args)
     downstream(backbone, train_loader, val_loader, args, args.num_classes)
