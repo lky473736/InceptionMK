@@ -1,7 +1,7 @@
 # InceptionMK
 **(paper source) Geometric Self-Supervised Learning for HAR using Inception with Multi-Kernel Convolutions (https://github.com/lky473736/InceptionMK.git)**
 
-<p align="center"><img src='./graphical_abstract.png'></p>
+<p align="center"><img src='./vpipeline'></p>
 
 This repository implements the methodology proposed in the paper **Geometric Self-Supervised Learning for HAR using Inception with Multi-Kernel Convolutions**.
 
@@ -21,18 +21,6 @@ The system works with four popular HAR datasets.
 4. **mHealth Dataset**: Contains data from body-worn sensors for 12 physical activities.
    - Download: https://archive.ics.uci.edu/ml/datasets/mhealth+dataset
 
-
-## Directory Structure
-
-```
-InceptionMK/
-├── model.py       
-├── LICENSE
-├── README.md
-├── graphical_abstract.png 
-├── model_architecture.png 
-```
-
 ## Model Architecture
 
 <p align="center"><img src='./model_architecture.png'></p>
@@ -50,17 +38,6 @@ InceptionMK/
 - Dual Heads:
     - Activity Classification Head (main task)
     - Rotation Angle Classification Head (self-supervised pretext task)
-
-## Self-Supervised Learning Objective
-
-The overall loss function is here.
-
-- $L_{total} = L_{main} + \alpha \cdot L_{pre}$
-
-    - **$L_{main}$**: Cross-entropy loss for activity classification
-    - **$L_{pre}$**: Cross-entropy loss for rotation prediction (0°, 90°, 180°, 270° rotations)
-    - **$\alpha$**: Weight factor for pretext loss
-
 
 ## Citing this Repository
 
