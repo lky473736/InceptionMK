@@ -23,11 +23,11 @@ class InceptionBlock(nn.Module):
         )
         self.branch2 = nn.Sequential(
             DSConv1D(in_channels, out_channels, kernel_size=1),
-            DSConv1D(out_channels, out_channels, kernel_size=1)
+            DSConv1D(out_channels, out_channels, kernel_size=3)
         )
         self.branch3 = nn.Sequential(
             DSConv1D(in_channels, out_channels, kernel_size=1),
-            DSConv1D(out_channels, out_channels, kernel_size=1)
+            DSConv1D(out_channels, out_channels, kernel_size=7)
         )
         self.branch4 = DSConv1D(in_channels, out_channels, kernel_size=1)
         
