@@ -1,13 +1,12 @@
-# model.py
 import torch
 import torch.nn as nn
 from torchinfo import summary
 
 class DSConv1D(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0):
         super(DSConv1D, self).__init__()
-        self.depthwise = nn.Conv1d(in_channels, in_channels, kernel_size=kernel_size, padding=kernel_size // 2, groups=in_channels)
-        self.pointwise = nn.Conv1d(in_channels, out_channels, kernel_size=1)
+        self.depthwise = nn.Conv1d(in_channels, in_channels, kernel_size, stride, padding, groups=in_channels)
+        self.pointwise = nn.Conv1d(in_channels, out_channels, 1)
 
     def forward(self, x):
         x = self.depthwise(x)
@@ -17,107 +16,102 @@ class DSConv1D(nn.Module):
 class InceptionBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(InceptionBlock, self).__init__()
+        branch_out = out_channels // 4
         self.branch1 = nn.Sequential(
-            nn.MaxPool1d(kernel_size=3, stride=1, padding=1),
-            DSConv1D(in_channels, out_channels, kernel_size=1)
+            nn.MaxPool1d(3, stride=1, padding=1),
+            DSConv1D(in_channels, branch_out, 1)
         )
         self.branch2 = nn.Sequential(
-            DSConv1D(in_channels, out_channels, kernel_size=1),
-            DSConv1D(out_channels, out_channels, kernel_size=3)
+            DSConv1D(in_channels, branch_out, 1),
+            DSConv1D(branch_out, branch_out, 3, padding=1)
         )
         self.branch3 = nn.Sequential(
-            DSConv1D(in_channels, out_channels, kernel_size=1),
-            DSConv1D(out_channels, out_channels, kernel_size=7)
+            DSConv1D(in_channels, branch_out, 1),
+            DSConv1D(branch_out, branch_out, 5, padding=2)
         )
-        self.branch4 = DSConv1D(in_channels, out_channels, kernel_size=1)
-        
-        concat_channels = out_channels * 4
-        self.skip = nn.Conv1d(in_channels, concat_channels, kernel_size=1) if in_channels != concat_channels else nn.Identity()
-        self.activation = nn.ReLU()
+        self.branch4 = DSConv1D(in_channels, branch_out, 1)
+        self.shortcut = nn.Conv1d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
+        self.relu = nn.ReLU()
 
     def forward(self, x):
-        out1 = self.branch1(x)
-        out2 = self.branch2(x)
-        out3 = self.branch3(x)
-        out4 = self.branch4(x)
-        concat = torch.cat([out1, out2, out3, out4], dim=1)
-        skip = self.skip(x)
-        out = concat + skip
-        out = self.activation(out)
+        identity = self.shortcut(x)
+        b1 = self.branch1(x)
+        b2 = self.branch2(x)
+        b3 = self.branch3(x)
+        b4 = self.branch4(x)
+        out = torch.cat([b1, b2, b3, b4], dim=1)
+        out += identity
+        out = self.relu(out)
         return out
 
 class MultiKernelBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(MultiKernelBlock, self).__init__()
-        self.branch1 = DSConv1D(in_channels, out_channels, kernel_size=1)
-        self.branch2 = DSConv1D(in_channels, out_channels, kernel_size=3)
-        self.branch3 = DSConv1D(in_channels, out_channels, kernel_size=5)
-        self.branch4 = DSConv1D(in_channels, out_channels, kernel_size=7)
-        
-        concat_channels = out_channels * 4
-        self.skip = nn.Conv1d(in_channels, concat_channels, kernel_size=1) if in_channels != concat_channels else nn.Identity()
-        self.activation = nn.ReLU()
+        branch_out = out_channels // 4
+        self.branch1 = DSConv1D(in_channels, branch_out, 1)
+        self.branch2 = DSConv1D(in_channels, branch_out, 3, padding=1)
+        self.branch3 = DSConv1D(in_channels, branch_out, 5, padding=2)
+        self.branch4 = DSConv1D(in_channels, branch_out, 7, padding=3)
+        self.bn = nn.BatchNorm1d(out_channels)
+        self.shortcut = nn.Conv1d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
+        self.relu = nn.ReLU()
 
     def forward(self, x):
-        out1 = self.branch1(x)
-        out2 = self.branch2(x)
-        out3 = self.branch3(x)
-        out4 = self.branch4(x)
-        concat = torch.cat([out1, out2, out3, out4], dim=1)
-        skip = self.skip(x)
-        out = concat + skip
-        out = self.activation(out)
+        identity = self.shortcut(x)
+        b1 = self.branch1(x)
+        b2 = self.branch2(x)
+        b3 = self.branch3(x)
+        b4 = self.branch4(x)
+        out = torch.cat([b1, b2, b3, b4], dim=1)
+        out = self.bn(out)
+        out += identity
+        out = self.relu(out)
         return out
 
 class InceptionMK(nn.Module):
-    def __init__(self, input_channels=9, stem_out=64, block_out=32, embedding_dim=128, num_classes=10, num_rotations=4):
+    def __init__(self, input_channels=9, stem_out=64, inception_out=128, mk_out=128, num_classes=6, num_rotations=4):
         super(InceptionMK, self).__init__()
         self.stem = nn.Sequential(
-            nn.Conv1d(input_channels, stem_out, kernel_size=3, padding=1),
+            nn.Conv1d(input_channels, stem_out, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm1d(stem_out),
             nn.ReLU()
         )
-        self.inception = InceptionBlock(stem_out, block_out)
-        self.mk_block = MultiKernelBlock(block_out * 4, block_out)
+        self.inception = InceptionBlock(stem_out, inception_out)
+        self.mk_block = MultiKernelBlock(inception_out, mk_out)
         self.global_pool = nn.AdaptiveAvgPool1d(1)
         self.flatten = nn.Flatten()
-        self.embedding = nn.Linear(block_out * 4, embedding_dim)
+        
         self.activity_head = nn.Sequential(
-            nn.LayerNorm(embedding_dim),
-            nn.Linear(embedding_dim, 128),
+            nn.Linear(mk_out, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
             nn.Dropout(0.3),
-            nn.Linear(128, num_classes)
+            nn.Linear(256, num_classes)
         )
+        
         self.rotation_head = nn.Sequential(
-            nn.LayerNorm(embedding_dim),
-            nn.Linear(embedding_dim, 128),
+            nn.Linear(mk_out, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
             nn.Dropout(0.3),
-            nn.Linear(128, num_rotations)
+            nn.Linear(256, num_rotations)
         )
 
     def forward_features(self, x):
-        x = x.transpose(1, 2)
+        if x.shape[-1] == 9: 
+            x = x.transpose(1, 2)
         x = self.stem(x)
         x = self.inception(x)
         x = self.mk_block(x)
         x = self.global_pool(x)
         x = self.flatten(x)
-        embedding = self.embedding(x)
-        return embedding
+        return x
 
     def forward(self, x):
-        x = x.transpose(1, 2)
-        x = self.stem(x)
-        x = self.inception(x)
-        x = self.mk_block(x)
-        x = self.global_pool(x)
-        x = self.flatten(x)
-        embedding = self.embedding(x)
-        activity_logits = self.activity_head(embedding)
-        rotation_logits = self.rotation_head(embedding)
+        features = self.forward_features(x)
+        activity_logits = self.activity_head(features)
+        rotation_logits = self.rotation_head(features)
         return activity_logits, rotation_logits
 
 if __name__ == '__main__':
-    model = InceptionMK()
-    example_input = torch.randn(2, 100, 9)
-    summary(model, input_data=example_input)
+    model = InceptionMK(input_channels=9, num_classes=6, num_rotations=4)
