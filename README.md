@@ -1,7 +1,7 @@
 # InceptionMK
 **(paper source) Geometric Self-Supervised Learning for HAR using Inception with Multi-Kernel Convolutions (https://github.com/lky473736/InceptionMK.git)**
 
-<p align="center"><img src='./vpipeline.png'></p>
+<p align="center"><img src='./model_architecture.png'></p>
 
 This repository implements the methodology proposed in the paper **Geometric Self-Supervised Learning for HAR using Inception with Multi-Kernel Convolutions**.
 
@@ -22,8 +22,6 @@ The system works with four popular HAR datasets.
    - Download: https://archive.ics.uci.edu/ml/datasets/mhealth+dataset
 
 ## Model Architecture
-
-<p align="center"><img src='./model_architecture.png'></p>
 
 - Stem Layer: Conv1D + BatchNorm + ReLU to extract initial local features.
 
